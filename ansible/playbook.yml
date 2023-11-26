@@ -1,6 +1,12 @@
 ---
 - hosts: vm
 
+
+  vars:
+    server_name: ansiblesymfony.com
+    symfony_root_dir: /var/www/project
+    symfony_web_dir: "{{ symfony_root_dir }}/public"
+    symfony_var_dir: "{{ symfony_root_dir}}/var"
   tasks:
     - ping: ~
 
@@ -13,6 +19,15 @@
       become: true
       apt:
         upgrade: safe
+
+    - name: Install low-level utilities
+      become: true
+      apt:
+        name: "{{ item }}"
+      with_items:
+        - zip
+        - unzip
+
 
 
     - name: Install Git VCS
@@ -30,4 +45,146 @@
       become: true
       apt:
         name: aptitude
+
+    - name: Install Nginx web Server
+      become: true
+      apt:
+        name: nginx
+        state: latest
+      notify: Restart Nginx
+
+    - name: Install MySQL DB Server
+      become: true
+      apt:
+        name: mysql-server
+        state: latest
+
+    - name: Install ICU (InternationalComponents for Unicode)
+      become: true
+      apt:
+        name: libicu-dev
+        state: latest
+
+    - name: PHP CLI
+      become: true
+      apt:
+        name: "{{ item }}"
+        state: latest
+      with_items:
+        - php7.4-cli
+        - php7.4-curl
+        - php7.4-fpm
+        - php7.4-intl
+        - php7.4-mysql
+        - php7.4-xml
+      notify: Restart PHP-FPM
+
+    - name: Set date.timezone for CLI
+      become: true
+      lineinfile:
+        dest: /etc/php/7.4/fpm/php.ini
+        regexp: "date.timezone="
+        line: "date.timezone = UTC"
+      notify: Restart PHP-FPM
+
+    - name: Create project directory and set its permissions
+      become: true
+      file:
+        path: "{{symfony_root_dir}}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        recurse: yes
+
+    - name: Checkout Git repository
+      git:
+        repo: https://github.com/codereviewvideos/symfony-4-demo-app.git
+        dest: "{{symfony_root_dir}}"
+        force: yes
+
+
+    - name: Create .env file
+      become: true
+      command: "cp {{symfony_root_dir}}/.env.dist {{symfony_root_dir}}/.env"
+
+
+
+    - name: Download Composer
+      become: true
+      script: scripts/install_composer.sh
+
+    - name: Move Composer globally
+      become: true
+      command: "mv composer.phar /usr/local/bin/composer"
+
+    - name: Set permissions on Composer
+      become: true
+      file:
+        path: /usr/local/bin/composer
+        mode: "a+x"
+
+    - name: Update Composer Dependencies
+      composer:
+        command: update
+        working_dir: "{{ symfony_root_dir }}"
+
+    - name: allow composer plugin
+      command: "composer config --no-plugins allow-plugins.symfony/flex true"
+      args:
+        chdir: "{{symfony_root_dir}}"
+
+    - name: Install Composer Dependencies
+      composer:
+        command: install
+        working_dir: "{{ symfony_root_dir }}"
+        no_dev: no
+
+
+    - name: Add Symfony config template to the nginx available sites
+      become: true
+      template:
+        src: templates/symfony.conf
+        dest: "/etc/nginx/sites-available/{{ server_name }}.conf"
+      notify: Restart Nginx
+
+    - name: Enable Symfony config template from Nginx available sites
+      become: true
+      file:
+        src: "/etc/nginx/sites-available/{{ server_name }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ server_name }}.conf"
+        state: link
+      notify: Restart Nginx
+
+    - name: Add enabled Nginx site /etc/hosts
+      become: true
+      lineinfile:
+        dest: /etc/hosts
+        regexp: "{{ server_name }}"
+        line: "127.0.0.1 {{ server_name }}"
+
+    - name: Fix var permissions
+      file:
+        path: "{{symfony_var_dir}}"
+        state: directory
+        mode: 0777
+        recurse: yes
+
+
+
+
+
+  handlers:
+    - name: Restart Nginx
+      become: true
+      service:
+        name: nginx
+        state: restarted
+
+    - name: Restart PHP-FPM
+      become: true
+      service:
+        name: php7.4-fpm
+        state: restarted
+
+
 
